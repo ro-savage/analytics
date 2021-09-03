@@ -1,4 +1,5 @@
 defmodule PlausibleWeb.Api.StatsController do
+  require Logger
   use PlausibleWeb, :controller
   use Plausible.Repo
   use Plug.ErrorHandler
@@ -6,6 +7,35 @@ defmodule PlausibleWeb.Api.StatsController do
   alias Plausible.Stats.{Query, Filters}
 
   def main_graph(conn, params) do
+    site = conn.assigns[:site]
+    query = Query.from(site.timezone, params) |> Filters.add_prefix()
+
+    timeseries_query =
+      if query.period == "realtime" do
+        %Query{query | period: "30m"}
+      else
+        query
+      end
+
+    timeseries = Task.async(fn -> Stats.timeseries(site, timeseries_query, ["visitors"]) end)
+    {top_stats, sample_percent} = fetch_top_stats(site, query)
+
+    timeseries_result = Task.await(timeseries)
+    plot = Enum.map(timeseries_result, fn row -> row["visitors"] end)
+    labels = Enum.map(timeseries_result, fn row -> row["date"] end)
+    present_index = present_index_for(site, query, labels)
+
+    json(conn, %{
+      plot: plot,
+      labels: labels,
+      present_index: present_index,
+      top_stats: top_stats,
+      interval: query.interval,
+      sample_percent: sample_percent
+    })
+  end
+
+  def all_stats(conn, params) do
     site = conn.assigns[:site]
     query = Query.from(site.timezone, params) |> Filters.add_prefix()
 
@@ -215,7 +245,19 @@ defmodule PlausibleWeb.Api.StatsController do
       Stats.breakdown(site, query, "visit:source", metrics, pagination)
       |> transform_keys(%{"source" => "name", "visitors" => "count"})
 
-    json(conn, res)
+    IO.puts "****************"
+    IO.puts "****************"
+    Logger.info(res)
+    IO.puts "****************"
+    IO.puts "****************"
+
+#    updated = Enum.map('abc', fn num -> 1000 + num end)
+
+    updated =  Enum.map(res, fn stat ->
+      stat
+    end)
+
+    json(conn, updated)
   end
 
   def utm_mediums(conn, params) do

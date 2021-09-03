@@ -6,7 +6,7 @@ import * as storage from '../../storage'
 import FadeIn from '../../fade-in'
 import Bar from '../bar'
 import MoreLink from '../more-link'
-import numberFormatter from '../../number-formatter'
+import numberFormatter, {percentageFormatter} from '../../number-formatter'
 import * as api from '../../api'
 import LazyLoader from '../../lazy-loader'
 
@@ -33,14 +33,46 @@ class AllSources extends React.Component {
     return this.props.query.period === 'realtime'
   }
 
+  hasGoalFilter() {
+    return !!this.props.query.filters.goal
+  }
+
   fetchReferrers() {
-    api.get(`/api/stats/${encodeURIComponent(this.props.site.domain)}/sources`, this.props.query, {show_noref: this.showNoRef()})
-      .then((res) => this.setState({loading: false, referrers: res}))
+    if (this.hasGoalFilter()){
+      const fetchPromise = api.get(`/api/stats/${encodeURIComponent(this.props.site.domain)}/sources`, this.props.query, {show_noref: this.showNoRef()})
+
+      const queryWithoutGoal = {
+        ...this.props.query,
+        filters: { ...this.props.query.filters }
+      }
+      queryWithoutGoal.filters.goal = null
+      const fetchWithoutGoalPromise = api.get(`/api/stats/${encodeURIComponent(this.props.site.domain)}/sources`, queryWithoutGoal, {show_noref: this.showNoRef()})
+
+      Promise.all([fetchPromise, fetchWithoutGoalPromise]).then(values => {
+        const referrersWithGoal = values[0]
+        const referrersWithoutGoal = values[1]
+        const referrers = referrersWithGoal.map(referrer => {
+          const allVisitors = referrersWithoutGoal.find(ref => ref.name === referrer.name).count
+          const conversionRate =  referrer.count / allVisitors * 100
+
+          return {
+            ...referrer,
+            conversionRate,
+          }
+        })
+        this.setState({loading: false, referrers })
+      })
+    } else {
+      api.get(`/api/stats/${encodeURIComponent(this.props.site.domain)}/sources`, this.props.query, {show_noref: this.showNoRef()})
+         .then((res) => this.setState({loading: false, referrers: res}))
+    }
   }
 
   renderReferrer(referrer) {
     const query = new URLSearchParams(window.location.search)
     query.set('source', referrer.name)
+
+    const showCR = this.hasGoalFilter()
 
     return (
       <div
@@ -66,7 +98,8 @@ class AllSources extends React.Component {
             </Link>
           </span>
         </Bar>
-        <span className="font-medium dark:text-gray-200">{numberFormatter(referrer.count)}</span>
+        <span className="font-medium dark:text-gray-200 w-10 text-right">{numberFormatter(referrer.count)}</span>
+        {showCR && <span className="font-medium dark:text-gray-200 w-20 text-right">{percentageFormatter(referrer.conversionRate)}%</span>}
       </div>
     )
   }
@@ -76,12 +109,17 @@ class AllSources extends React.Component {
   }
 
   renderList() {
+    const showCR = this.hasGoalFilter()
+
     if (this.state.referrers && this.state.referrers.length > 0) {
       return (
         <React.Fragment>
           <div className="flex items-center justify-between mt-3 mb-2 text-xs font-bold tracking-wide text-gray-500">
             <span>Source</span>
-            <span>{this.label()}</span>
+            <div className="text-right">
+              <span className="inline-block w-10">{this.label()}</span>
+              {showCR && <span className="inline-block w-20">CR</span>}
+            </div>
           </div>
 
           <FlipMove className="flex-grow">
